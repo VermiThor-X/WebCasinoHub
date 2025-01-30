@@ -54,7 +54,83 @@ const database = require('./database/mysql')
 var constants = require('./var/constants')
 var database_config = constants.DATABASE[0]
 
+const USDT_CONTRACT_ADDRESS_ETHEREUM = "0xdAC17F958D2ee523a2206206994597C13D831ec7";
+const USDT_CONTRACT_ADDRESS_BNB = "0x55d398326f99059fF775485246999027B3197955";
+
+// ABI for EVM chains (Ethereum and BSC)
+const ERC20_ABI = [
+  "function balanceOf(address owner) view returns (uint256)",
+  "function decimals() view returns (uint8)",
+];
+
+// Initialize providers
+const providers = {
+  ethereum: new ethers.JsonRpcProvider(process.env.ETHEREUM_RPC_URL),
+  bsc: new ethers.JsonRpcProvider(process.env.BSC_RPC_URL)
+};
+
+// Initialize contracts
+const contracts = {
+  ethereum: new ethers.Contract(USDT_CONTRACT_ADDRESS_ETHEREUM, ERC20_ABI, providers.ethereum),
+  bsc: new ethers.Contract(USDT_CONTRACT_ADDRESS_BNB, ERC20_ABI, providers.bsc)
+};
+
+// Helper function to fetch balance
+async function getBalance(address, chain) {
+  const contract = contracts[chain];
+  const [balance, decimals] = await Promise.all([
+    contract.balanceOf(address),
+    contract.decimals()
+  ]);
+  return ethers.formatUnits(balance, decimals);
+}
+
+
 io.on('connection', function(socket) {
+  socket.on('check_usdt_balance', async (data) => {
+    try {
+      const { chain, address } = data
+      
+      // Validate chain
+      const supportedChains = ['ethereum', 'bsc']
+      if (!supportedChains.includes(chain.toLowerCase())) {
+        socket.emit('usdt_balance_result', {
+          success: false,
+          error: 'Unsupported chain. Use ethereum or bsc'
+        })
+        return
+      }
+
+      // Validate address format
+      if (!ethers.isAddress(address)) {
+        socket.emit('usdt_balance_result', {
+          success: false,
+          error: 'Invalid wallet address format'
+        })
+        return
+      }
+
+      // Fetch balance
+      const balance = await getBalance(address, chain)
+
+      socket.emit('usdt_balance_result', {
+        success: true,
+        data: {
+          chain,
+          address,
+          balance: balance.toString(),
+          currency: 'USDT'
+        }
+      })
+    } catch (error) {
+      console.error('Error fetching balance:', error)
+      socket.emit('usdt_balance_result', {
+        success: false,
+        error: 'Failed to fetch balance',
+        details: error.message
+      })
+    }
+  })
   socket.on('signin_send', (data) => {  
     database_config.sql = "SELECT * FROM casino_user;"
     database_config.sql += "SELECT * FROM login_user;"
